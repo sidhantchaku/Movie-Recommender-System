@@ -210,6 +210,11 @@ OMDb metadata:
 ${movieData ? JSON.stringify(movieData, null, 2) : "No OMDb metadata was found for this query. Still generate a helpful general movie guide, and make the confidenceNote honest."}
 
 Return a structured report for a movie chatbot. Keep it helpful for a student GenAI project demo:
+Rules:
+- Write only in clear English.
+- Do not include markdown headings, code, citations, URLs, or raw scraped text.
+- Do not mention tools, prompts, APIs, or JSON.
+- Keep every field short and readable.
 Return exactly this JSON shape:
 {
   "title": "movie title",
@@ -234,7 +239,8 @@ function parseMovieReport(text: string, movieTitle: string, movieData: OmdbMovie
 
   try {
     const parsed = MovieReportSchema.safeParse(JSON.parse(jsonText));
-    return parsed.success ? parsed.data : createFallbackReport(movieTitle, movieData);
+    const report = parsed.success ? sanitizeMovieReport(parsed.data) : null;
+    return report && isReadableReport(report) ? report : createFallbackReport(movieTitle, movieData);
   } catch (error) {
     console.warn("[api/movie] AI JSON parse failed", error);
     return createFallbackReport(movieTitle, movieData);
@@ -283,6 +289,64 @@ function createFallbackReport(movieTitle: string, movieData: OmdbMovie | null): 
       ? "This fallback response is based on available OMDb metadata because the AI response could not be parsed cleanly."
       : "OMDb metadata was not available, so this is a low-confidence fallback response."
   };
+}
+
+function sanitizeMovieReport(report: MovieReport): MovieReport {
+  return {
+    title: cleanText(report.title, 80),
+    tagline: cleanText(report.tagline, 140),
+    overview: cleanText(report.overview, 700),
+    keyFacts: report.keyFacts.map((fact) => cleanText(fact, 180)).filter(Boolean).slice(0, 7),
+    whyWatch: cleanText(report.whyWatch, 400),
+    themes: report.themes.map((theme) => cleanText(theme, 80)).filter(Boolean).slice(0, 6),
+    similarMovies: report.similarMovies.map((movie) => cleanText(movie, 80)).filter(Boolean).slice(0, 6),
+    contentNote: cleanText(report.contentNote, 240),
+    confidenceNote: cleanText(report.confidenceNote, 240)
+  };
+}
+
+function cleanText(value: string, maxLength: number) {
+  return value
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[#*_`[\]<>]/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength)
+    .trim();
+}
+
+function isReadableReport(report: MovieReport) {
+  const text = [
+    report.title,
+    report.tagline,
+    report.overview,
+    report.whyWatch,
+    report.contentNote,
+    report.confidenceNote,
+    ...report.keyFacts,
+    ...report.themes,
+    ...report.similarMovies
+  ].join(" ");
+
+  const suspiciousPatterns = [
+    /[{};]/,
+    /\bfunction\b|\bconst\b|\blet\b|\breturn\b/i,
+    /\bapi\b|\bjson\b|\bprompt\b|\bhttp\b/i,
+    /\bRegi[oó]n\b|\badmin\b|\busuario\b|\barchivo\b|\bsistema\b/i
+  ];
+  const letterMatches = text.match(/[a-z]/gi) ?? [];
+  const whitespaceMatches = text.match(/\s/g) ?? [];
+  const letterRatio = letterMatches.length / Math.max(text.length, 1);
+  const whitespaceRatio = whitespaceMatches.length / Math.max(text.length, 1);
+
+  return (
+    report.keyFacts.length >= 3 &&
+    report.themes.length >= 3 &&
+    report.similarMovies.length >= 3 &&
+    letterRatio > 0.45 &&
+    whitespaceRatio > 0.08 &&
+    !suspiciousPatterns.some((pattern) => pattern.test(text))
+  );
 }
 
 function safePosterUrl(posterUrl?: string) {
