@@ -25,21 +25,23 @@ type MovieReport = {
   };
 };
 
+const sampleMovies = ["Inception", "Interstellar", "3 Idiots", "Welcome"];
+
 export default function Home() {
   const [movie, setMovie] = useState("");
   const [report, setReport] = useState<MovieReport | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const query = movie.trim();
+  async function generateMovieReport(query: string) {
+    const movieQuery = query.trim();
 
-    if (!query) {
+    if (!movieQuery) {
       setError("Type a movie name first.");
       return;
     }
 
+    setMovie(movieQuery);
     setIsLoading(true);
     setError("");
     setReport(null);
@@ -50,7 +52,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ movie: query })
+        body: JSON.stringify({ movie: movieQuery })
       });
 
       const data = await response.json();
@@ -67,38 +69,81 @@ export default function Home() {
     }
   }
 
-  return (
-    <main className="page">
-      <section className="hero">
-        <p className="eyebrow">GenAI movie discovery</p>
-        <h1>Search any movie. Get an AI-powered guide.</h1>
-        <p>
-          Enter a title and the app combines movie metadata with a generative AI summary:
-          story overview, key facts, themes, watch reasons, content note, and similar picks.
-        </p>
-      </section>
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void generateMovieReport(movie);
+  }
 
-      <section className="search-card" aria-label="Movie search">
-        <form className="search-form" onSubmit={handleSubmit}>
-          <input
-            aria-label="Movie title"
-            onChange={(event) => setMovie(event.target.value)}
-            placeholder="Try Interstellar, Inception, 3 Idiots..."
-            value={movie}
-          />
-          <button disabled={isLoading} type="submit">
-            {isLoading ? "Thinking..." : "Generate"}
-          </button>
-        </form>
-        <p className="hint">
-          Deploy-ready for Vercel. Uses <strong>GOOGLE_GENERATIVE_AI_API_KEY</strong> for Gemini and{" "}
-          <strong>OMDB_API_KEY</strong> when movie metadata is available.
-        </p>
-        {error ? <p className="error">{error}</p> : null}
+  return (
+    <main className="page-shell">
+      <nav className="top-nav" aria-label="Main navigation">
+        <div className="brand">
+          <span className="brand-mark">AI</span>
+          <span>MovieLens</span>
+        </div>
+        <div className="nav-pill">Gemini + OMDb</div>
+      </nav>
+
+      <section className="hero-layout">
+        <div className="hero-copy">
+          <p className="eyebrow">GenAI movie discovery</p>
+          <h1>Find a movie. Get the story, vibe, and watch guide.</h1>
+          <p>
+            Search any title and get a clean AI-generated movie card with key facts,
+            themes, similar picks, and a spoiler-light overview.
+          </p>
+
+          <form className="search-console" onSubmit={handleSubmit}>
+            <label htmlFor="movie-search">Movie title</label>
+            <div className="search-row">
+              <input
+                aria-label="Movie title"
+                id="movie-search"
+                onChange={(event) => setMovie(event.target.value)}
+                placeholder="Try Inception, Welcome, 3 Idiots..."
+                value={movie}
+              />
+              <button disabled={isLoading} type="submit">
+                {isLoading ? "Generating..." : "Generate"}
+              </button>
+            </div>
+          </form>
+
+          <div className="quick-picks" aria-label="Suggested movie searches">
+            {sampleMovies.map((sample) => (
+              <button disabled={isLoading} key={sample} onClick={() => generateMovieReport(sample)} type="button">
+                {sample}
+              </button>
+            ))}
+          </div>
+
+          {error ? <p className="error-banner">{error}</p> : null}
+        </div>
+
+        <aside className="hero-card" aria-label="Project highlights">
+          <div className="orb" />
+          <p className="hero-card-label">Live stack</p>
+          <h2>Movie intelligence, generated on demand.</h2>
+          <div className="feature-grid">
+            <FeatureCard title="Metadata" value="OMDb" />
+            <FeatureCard title="AI model" value="Gemini" />
+            <FeatureCard title="Deploy" value="Vercel" />
+            <FeatureCard title="Output" value="JSON cards" />
+          </div>
+        </aside>
       </section>
 
       {report ? <MovieResult report={report} /> : <EmptyState />}
     </main>
+  );
+}
+
+function FeatureCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="feature-card">
+      <span>{title}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -112,32 +157,47 @@ function MovieResult({ report }: { report: MovieReport }) {
   ].filter(Boolean);
 
   return (
-    <section className="result-card" aria-label={`${report.title} AI report`}>
-      <div className="result-grid">
+    <section className="movie-panel" aria-label={`${report.title} AI report`}>
+      <div className="poster-wrap">
         {report.posterUrl ? (
           <Image
             alt={`${report.title} poster`}
             className="poster"
-            height={390}
+            height={480}
             src={report.posterUrl}
-            width={260}
+            width={320}
           />
         ) : (
           <div className="poster poster-fallback">No poster available</div>
         )}
+      </div>
 
-        <div className="movie-content">
-          <div className="movie-title">
-            <h2>{report.title}</h2>
-            <p>{report.tagline}</p>
-            {facts.length ? <div className="pills">{facts.map((fact) => <span className="pill" key={fact}>{fact}</span>)}</div> : null}
-          </div>
+      <div className="report-content">
+        <div className="movie-title">
+          <p className="eyebrow">AI generated report</p>
+          <h2>{report.title}</h2>
+          <p>{report.tagline}</p>
+          {facts.length ? (
+            <div className="pills">
+              {facts.map((fact) => (
+                <span className="pill" key={fact}>
+                  {fact}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
-          <InfoSection title="Overview">{report.overview}</InfoSection>
+        <InfoSection title="Overview">{report.overview}</InfoSection>
+
+        <div className="report-grid">
           <ListSection items={report.keyFacts} title="Key Facts" />
           <InfoSection title="Why Watch">{report.whyWatch}</InfoSection>
           <ListSection items={report.themes} title="Themes" />
           <ListSection items={report.similarMovies} title="Similar Movies" />
+        </div>
+
+        <div className="report-grid two-column">
           <InfoSection title="Content Note">{report.contentNote}</InfoSection>
           <InfoSection title="Confidence">{report.confidenceNote}</InfoSection>
         </div>
@@ -170,13 +230,15 @@ function ListSection({ items, title }: { items: string[]; title: string }) {
 
 function EmptyState() {
   return (
-    <section className="empty-card">
-      <div className="section">
-        <h3>How it works</h3>
-        <p>
-          The API route searches OMDb for movie details, then asks the model to produce
-          a structured report. The UI renders fields directly instead of dumping raw AI text.
-        </p>
+    <section className="empty-state">
+      <div>
+        <p className="eyebrow">Ready when you are</p>
+        <h2>Search a film to generate your first movie card.</h2>
+      </div>
+      <div className="empty-steps">
+        <span>1. Enter a title</span>
+        <span>2. Fetch movie metadata</span>
+        <span>3. Generate AI guide</span>
       </div>
     </section>
   );
