@@ -91,8 +91,8 @@ export default function Home() {
           </button>
         </form>
         <p className="hint">
-          Deploy-ready for Vercel. Add <strong>AI_GATEWAY_API_KEY</strong> and{" "}
-          <strong>OMDB_API_KEY</strong> in your Vercel project settings.
+          Deploy-ready for Vercel. Uses <strong>GOOGLE_GENERATIVE_AI_API_KEY</strong> for Gemini and{" "}
+          <strong>OMDB_API_KEY</strong> when movie metadata is available.
         </p>
         {error ? <p className="error">{error}</p> : null}
       </section>

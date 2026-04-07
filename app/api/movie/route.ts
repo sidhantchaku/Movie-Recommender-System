@@ -1,5 +1,5 @@
 import { google } from "@ai-sdk/google";
-import { generateText, Output } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -19,6 +19,8 @@ const MovieReportSchema = z.object({
   contentNote: z.string(),
   confidenceNote: z.string()
 });
+
+type MovieReport = z.infer<typeof MovieReportSchema>;
 
 type OmdbMovie = {
   Title?: string;
@@ -71,18 +73,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { output } = await generateText({
+    const { text } = await generateText({
       model: getAiModel(),
-      output: Output.object({ schema: MovieReportSchema }),
       system:
-        "You are a movie research assistant. Produce concise, factual, spoiler-light movie guidance. If the provided metadata is incomplete, say so in confidenceNote instead of inventing exact facts.",
+        "You are a movie research assistant. Return only valid JSON. Do not wrap the JSON in markdown fences. If metadata is incomplete, be honest in confidenceNote instead of inventing exact facts.",
       prompt: buildPrompt(movieTitle, movieData)
     });
+    const report = parseMovieReport(text, movieTitle, movieData);
 
     return Response.json({
       report: {
-        ...output,
-        title: movieData?.Title ?? output.title,
+        ...report,
+        title: movieData?.Title ?? report.title,
         posterUrl: safePosterUrl(movieData?.Poster),
         metadata: {
           year: movieData?.Year,
@@ -96,11 +98,24 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    console.error(error);
-    return Response.json(
-      { error: "The AI model could not generate the movie report. Check your AI Gateway setup and try again." },
-      { status: 500 }
-    );
+    console.error("[api/movie] generation failed", error);
+
+    return Response.json({
+      report: {
+        ...createFallbackReport(movieTitle, movieData),
+        title: movieData?.Title ?? movieTitle,
+        posterUrl: safePosterUrl(movieData?.Poster),
+        metadata: {
+          year: movieData?.Year,
+          rated: movieData?.Rated,
+          runtime: movieData?.Runtime,
+          genre: movieData?.Genre,
+          director: movieData?.Director,
+          actors: movieData?.Actors,
+          imdbRating: movieData?.imdbRating
+        }
+      }
+    });
   }
 }
 
@@ -162,15 +177,74 @@ OMDb metadata:
 ${movieData ? JSON.stringify(movieData, null, 2) : "No OMDb metadata is available because OMDB_API_KEY is not configured."}
 
 Return a structured report for a movie chatbot. Keep it helpful for a student GenAI project demo:
-- tagline: one short sentence.
-- overview: spoiler-light, 2 to 4 sentences.
-- keyFacts: concrete facts from metadata when available.
-- whyWatch: explain who might enjoy it.
-- themes: short phrases.
-- similarMovies: recommendations based on tone or genre.
-- contentNote: general age/content note based on rating and genre.
-- confidenceNote: mention whether OMDb metadata was available.
+Return exactly this JSON shape:
+{
+  "title": "movie title",
+  "tagline": "one short sentence",
+  "overview": "spoiler-light, 2 to 4 sentences",
+  "keyFacts": ["3 to 7 concrete facts"],
+  "whyWatch": "who might enjoy it and why",
+  "themes": ["3 to 6 short theme phrases"],
+  "similarMovies": ["3 to 6 similar movie recommendations"],
+  "contentNote": "general age/content note based on rating and genre",
+  "confidenceNote": "mention whether OMDb metadata was available"
+}
 `;
+}
+
+function parseMovieReport(text: string, movieTitle: string, movieData: OmdbMovie | null): MovieReport {
+  const jsonText = extractJsonObject(text);
+
+  if (!jsonText) {
+    return createFallbackReport(movieTitle, movieData);
+  }
+
+  const parsed = MovieReportSchema.safeParse(JSON.parse(jsonText));
+  return parsed.success ? parsed.data : createFallbackReport(movieTitle, movieData);
+}
+
+function extractJsonObject(text: string) {
+  const fencedJson = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+
+  if (fencedJson?.[1]) {
+    return fencedJson[1];
+  }
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  return text.slice(start, end + 1);
+}
+
+function createFallbackReport(movieTitle: string, movieData: OmdbMovie | null): MovieReport {
+  const title = movieData?.Title ?? movieTitle;
+  const genre = movieData?.Genre ?? "film";
+  const plot = movieData?.Plot && movieData.Plot !== "N/A" ? movieData.Plot : null;
+
+  return {
+    title,
+    tagline: `A quick AI guide for ${title}.`,
+    overview:
+      plot ??
+      `${title} appears to be the movie you searched for. I could not confirm detailed metadata for this title, so use this as a starting guide rather than a fully verified summary.`,
+    keyFacts: [
+      movieData?.Year ? `Release year: ${movieData.Year}` : "Release year was not available from metadata.",
+      movieData?.Genre ? `Genre: ${movieData.Genre}` : `Genre details were not available; searched as ${genre}.`,
+      movieData?.Director ? `Director: ${movieData.Director}` : "Director details were not available.",
+      movieData?.Actors ? `Main cast: ${movieData.Actors}` : "Cast details were not available."
+    ],
+    whyWatch: `Watch ${title} if you are interested in ${genre.toLowerCase()} stories and want a quick recommendation starting point.`,
+    themes: ["Story", "Characters", "Tone"],
+    similarMovies: ["Search with a more specific title", "Try adding the release year", "Try another movie in the same genre"],
+    contentNote: movieData?.Rated ? `Rated ${movieData.Rated}.` : "Rating information was not available.",
+    confidenceNote: movieData
+      ? "This fallback response is based on available OMDb metadata because the AI response could not be parsed cleanly."
+      : "OMDb metadata was not available, so this is a low-confidence fallback response."
+  };
 }
 
 function safePosterUrl(posterUrl?: string) {
