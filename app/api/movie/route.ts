@@ -37,6 +37,20 @@ type OmdbMovie = {
   Error?: string;
 };
 
+type OmdbSearchResult = {
+  Title?: string;
+  Year?: string;
+  imdbID?: string;
+  Type?: string;
+  Poster?: string;
+};
+
+type OmdbSearchResponse = {
+  Search?: OmdbSearchResult[];
+  Response?: string;
+  Error?: string;
+};
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const parsedBody = RequestSchema.safeParse(body);
@@ -56,21 +70,7 @@ export async function POST(request: Request) {
   }
 
   const movieTitle = parsedBody.data.movie;
-  let movieData: OmdbMovie | null = null;
-
-  try {
-    movieData = await fetchOmdbMovie(movieTitle);
-  } catch (error) {
-    return Response.json(
-      {
-        error:
-          error instanceof Error
-            ? `Movie metadata lookup failed: ${error.message}`
-            : "Movie metadata lookup failed."
-      },
-      { status: 404 }
-    );
-  }
+  const movieData = await fetchOmdbMovie(movieTitle);
 
   try {
     const { text } = await generateText({
@@ -146,27 +146,60 @@ async function fetchOmdbMovie(movieTitle: string): Promise<OmdbMovie | null> {
     return null;
   }
 
-  const params = new URLSearchParams({
+  const exactParams = new URLSearchParams({
     apikey: apiKey,
     plot: "full",
     t: movieTitle
   });
 
-  const response = await fetch(`https://www.omdbapi.com/?${params.toString()}`, {
-    cache: "no-store"
+  const exactMovie = await fetchOmdb<OmdbMovie>(exactParams);
+
+  if (exactMovie?.Response !== "False") {
+    return exactMovie;
+  }
+
+  const searchParams = new URLSearchParams({
+    apikey: apiKey,
+    s: movieTitle,
+    type: "movie"
+  });
+  const searchResults = await fetchOmdb<OmdbSearchResponse>(searchParams);
+  const firstMatch = searchResults?.Search?.find((result) => result.imdbID);
+
+  if (!firstMatch?.imdbID) {
+    console.warn("[api/movie] OMDb lookup found no match", {
+      movieTitle,
+      error: exactMovie?.Error ?? searchResults?.Error
+    });
+    return null;
+  }
+
+  const idParams = new URLSearchParams({
+    apikey: apiKey,
+    plot: "full",
+    i: firstMatch.imdbID
   });
 
-  if (!response.ok) {
-    throw new Error("OMDb request failed.");
+  const movieById = await fetchOmdb<OmdbMovie>(idParams);
+  return movieById?.Response === "False" ? null : movieById;
+}
+
+async function fetchOmdb<T>(params: URLSearchParams): Promise<T | null> {
+  try {
+    const response = await fetch(`https://www.omdbapi.com/?${params.toString()}`, {
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      console.warn("[api/movie] OMDb HTTP request failed", { status: response.status });
+      return null;
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    console.warn("[api/movie] OMDb request failed", error);
+    return null;
   }
-
-  const data = (await response.json()) as OmdbMovie;
-
-  if (data.Response === "False") {
-    throw new Error(data.Error ?? "Movie not found.");
-  }
-
-  return data;
 }
 
 function buildPrompt(movieTitle: string, movieData: OmdbMovie | null) {
@@ -174,7 +207,7 @@ function buildPrompt(movieTitle: string, movieData: OmdbMovie | null) {
 Movie searched by the user: ${movieTitle}
 
 OMDb metadata:
-${movieData ? JSON.stringify(movieData, null, 2) : "No OMDb metadata is available because OMDB_API_KEY is not configured."}
+${movieData ? JSON.stringify(movieData, null, 2) : "No OMDb metadata was found for this query. Still generate a helpful general movie guide, and make the confidenceNote honest."}
 
 Return a structured report for a movie chatbot. Keep it helpful for a student GenAI project demo:
 Return exactly this JSON shape:
@@ -199,8 +232,13 @@ function parseMovieReport(text: string, movieTitle: string, movieData: OmdbMovie
     return createFallbackReport(movieTitle, movieData);
   }
 
-  const parsed = MovieReportSchema.safeParse(JSON.parse(jsonText));
-  return parsed.success ? parsed.data : createFallbackReport(movieTitle, movieData);
+  try {
+    const parsed = MovieReportSchema.safeParse(JSON.parse(jsonText));
+    return parsed.success ? parsed.data : createFallbackReport(movieTitle, movieData);
+  } catch (error) {
+    console.warn("[api/movie] AI JSON parse failed", error);
+    return createFallbackReport(movieTitle, movieData);
+  }
 }
 
 function extractJsonObject(text: string) {
